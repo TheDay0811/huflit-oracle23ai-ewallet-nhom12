@@ -1,8 +1,9 @@
 import os
+import re
 import docx
 from docx import Document
 from docx.shared import Pt, Cm, Inches, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 from docx.enum.section import WD_SECTION
 from docx.oxml import OxmlElement, parse_xml
@@ -159,6 +160,25 @@ def init_styles(doc):
             st.paragraph_format.line_spacing = 1.15
 
 
+def break_long_tokens(text):
+    """Them Zero-Width Space sau '_', '/', '.' trong cac dinh danh/duong dan dai (>=11 ky tu) de Word Justify khong keo gian khoang trang."""
+    def repl(match):
+        tok = match.group(0)
+        if len(tok) < 11 or tok.startswith("http") or re.fullmatch(r"[0-9.,+%/-]+", tok):
+            return tok
+        # Chi chen break-hint cho token co ky tu noi (_, /, \, .) va do dai >= 11
+        if not any(ch in tok for ch in ("_", "/", "\\", ".")):
+            return tok
+        tok = tok.replace("_", "_\u200b")
+        tok = tok.replace("/", "/\u200b")
+        tok = tok.replace("\\", "\\\u200b")
+        # Cho phep ngat sau dau '.' neu ve truoc >= 4 ky tu (vd PKG_NGOAI_LE_VI.SP_..., DBMS_STATS.GATHER...)
+        tok = re.sub(r"([A-Za-z0-9_]{4,})\.", "\\1.\u200b", tok)
+        return tok
+
+    return re.sub(r"[A-Za-z0-9_./\\-]{11,}", repl, text)
+
+
 def p_body(doc, text, bold_prefix=None, space_after=6, first_line_indent=0.0):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -167,11 +187,11 @@ def p_body(doc, text, bold_prefix=None, space_after=6, first_line_indent=0.0):
     if first_line_indent:
         p.paragraph_format.first_line_indent = Cm(first_line_indent)
     if bold_prefix:
-        rb = p.add_run(bold_prefix)
+        rb = p.add_run(break_long_tokens(bold_prefix))
         rb.bold = True
         rb.font.name = "Times New Roman"
         rb.font.size = Pt(13)
-    r = p.add_run(text)
+    r = p.add_run(break_long_tokens(text))
     r.font.name = "Times New Roman"
     r.font.size = Pt(13)
     return p
@@ -183,21 +203,21 @@ def p_bullet(doc, bold_prefix, text):
     p.paragraph_format.line_spacing = 1.5
     p.paragraph_format.space_after = Pt(4)
     if bold_prefix:
-        rb = p.add_run(bold_prefix)
+        rb = p.add_run(break_long_tokens(bold_prefix))
         rb.bold = True
         rb.font.name = "Times New Roman"
         rb.font.size = Pt(13)
-    r = p.add_run(text)
+    r = p.add_run(break_long_tokens(text))
     r.font.name = "Times New Roman"
     r.font.size = Pt(13)
     return p
 
 
 def add_chapter(doc, title, page_break=True):
-    if page_break:
-        doc.add_page_break()
     h = doc.add_heading(title, level=1)
     h.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    if page_break:
+        h.paragraph_format.page_break_before = True
     return h
 
 
@@ -440,8 +460,15 @@ def build_front_matter(doc):
 
     # Nhan xet giang vien
     front_heading("NHẬN XÉT CỦA GIẢNG VIÊN", page_break=True)
-    for _ in range(10):
-        p_body(doc, "........................................................................................................................................................", space_after=10)
+    for _ in range(11):
+        p_note = doc.add_paragraph()
+        p_note.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p_note.paragraph_format.line_spacing = 1.5
+        p_note.paragraph_format.space_after = Pt(10)
+        p_note.paragraph_format.tab_stops.add_tab_stop(Cm(16.0), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+        r_tab = p_note.add_run("\t")
+        r_tab.font.name = "Times New Roman"
+        r_tab.font.size = Pt(13)
 
     # Muc luc
     front_heading("MỤC LỤC", page_break=True)
@@ -540,13 +567,13 @@ def build_chapters(doc):
            "toán ví điện tử nội bộ doanh nghiệp\" vì ba lý do cốt lõi sau:")
     p_bullet(doc, "Tính điển hình cao về xử lý ngoại lệ (Exception Handling): ",
              "Các nghiệp vụ nạp, rút, chuyển tiền và hoàn tiền đòi hỏi phải phát hiện và xử lý triệt để cả ngoại lệ định "
-             "sẵn của Oracle (NO_DATA_FOUND, DUP_VAL_ON_INDEX, VALUE_ERROR, ORA-00054/ORA-30006) lẫn các ngoại lệ nghiệp vụ "
+             "sẵn của Oracle (NO_DATA_FOUND, DUP_VAL_ON_INDEX, VALUE_ERROR, ORA-00054, ORA-30006) lẫn các ngoại lệ nghiệp vụ "
              "tự định nghĩa (số dư không đủ, giao dịch trùng lặp theo Idempotency Key, ví bị khoá, vượt hạn mức ngày).")
     p_bullet(doc, "Khả năng vận dụng toàn diện cấu trúc PL/SQL trên Oracle Database 23ai: ",
-             "Đề tài cho phép phối hợp nhịp nhàng giữa Stored Functions (bao gồm kiểu BOOLEAN chuẩn SQL mới trên Oracle 23ai), "
-             "Stored Procedures, Packages, Explicit Cursors để đối soát hàng loạt, SAVEPOINT/ROLLBACK bảo toàn tính nguyên tử "
-             "ACID, PRAGMA AUTONOMOUS_TRANSACTION để lưu vết lỗi ngay cả khi giao dịch chính bị huỷ bỏ, và Triggers/Compound "
-             "Triggers để ngăn chặn lỗi Mutating Table (ORA-04091).")
+             "Đề tài cho phép phối hợp nhịp nhàng giữa Stored Functions (gồm kiểu BOOLEAN chuẩn SQL mới trên Oracle 23ai), "
+             "Stored Procedures, Packages, Explicit Cursors để đối soát hàng loạt, SAVEPOINT / ROLLBACK bảo toàn tính nguyên tử "
+             "ACID, PRAGMA AUTONOMOUS_TRANSACTION để lưu vết lỗi ngay cả khi giao dịch chính bị huỷ bỏ, và Triggers cùng Compound "
+             "Trigger để ngăn chặn lỗi Mutating Table (ORA-04091).")
     p_bullet(doc, "Tính ứng dụng thực tế và khả năng triển khai hiện đại: ",
              "Toàn bộ cơ sở dữ liệu được đóng gói bằng Docker container Oracle Database 23ai Free, chạy song song thuận tiện "
              "trên DBeaver và kết nối trực tiếp với ứng dụng Web 3 tầng thông qua Node.js Express và driver oracledb Thin Mode.")
@@ -564,8 +591,8 @@ def build_chapters(doc):
              "ràng buộc CHECK bảo vệ số dư không âm và chỉ mục tổng hợp phục vụ tối ưu truy vấn.")
     p_bullet(doc, "Cài đặt hệ thống xử lý ngoại lệ và PL/SQL chuẩn mực: ",
              "Xây dựng Package PKG_NGOAI_LE_VI ánh xạ 10 mã lỗi nghiệp vụ (-20001 đến -20010) qua PRAGMA EXCEPTION_INIT; "
-             "5 Functions độc lập; Package PKG_QUAN_LY_VI xử lý Nạp/Rút/Chuyển/Thanh toán/Hoàn tiền/Đối soát Explicit Cursor; "
-             "và 3 Triggers (gồm 1 Compound Trigger).")
+             "5 Stored Functions độc lập; Package PKG_QUAN_LY_VI xử lý Nạp, Rút, Chuyển tiền, Thanh toán, Hoàn tiền và Đối soát "
+             "Explicit Cursor; cùng 3 Triggers (gồm 1 Compound Trigger).")
     p_bullet(doc, "Kiểm thử toàn diện và tối ưu hoá truy vấn: ",
              "Sinh dữ liệu lịch sử 15.000+ giao dịch (hơn 30.000 bút toán sổ cái), thực thi tối thiểu 8 kịch bản kiểm thử "
              "bao gồm cả race-condition song song và phân tích Execution Plan trước/sau tối ưu cho 2 truy vấn trọng tâm.")
@@ -590,13 +617,13 @@ def build_chapters(doc):
          "Gắn tên ngoại lệ tường minh với mã lỗi Oracle tuỳ biến giúp mã PL/SQL dễ đọc, phân loại chính xác từng tình huống biên."),
         ("Predefined Exceptions (DUP_VAL_ON_INDEX, NO_DATA_FOUND, ORA-00054)", "Bắt lỗi hệ thống Oracle tự động",
          "Bảo vệ ở tầng ràng buộc vật lý ngay cả khi hai luồng đồng thời vượt qua bước kiểm tra SELECT ban đầu."),
-        ("PRAGMA AUTONOMOUS_TRANSACTION", "Ghi nhật ký lỗi độc lập",
+        ("PRAGMA\nAUTONOMOUS_TRANSACTION", "Ghi nhật ký lỗi độc lập",
          "Cho phép COMMIT bản ghi vào NHAT_KY_LOI_GIAO_DICH trong khi giao dịch chuyển tiền chính bị ROLLBACK hoàn toàn."),
         ("Stored Functions & Oracle 23ai SQL BOOLEAN", "Tính phí, kiểm tra điều kiện, xếp hạng ví",
          "Tái sử dụng logic trong cả PL/SQL và câu lệnh SELECT SQL thuần; Oracle 23ai hỗ trợ kiểu BOOLEAN trực tiếp trong SQL."),
         ("PL/SQL Packages & Explicit Cursor", "Đóng gói nghiệp vụ & đối soát hàng loạt",
          "Tách biệt Specification và Body, chia sẻ biến ngữ cảnh package cho Trigger và duyệt cursor kiểm soát chặt chẽ quá trình đối soát."),
-        ("Compound Trigger (4 pha)", "Kiểm soát hạn mức ngày trên GIAO_DICH",
+        ("Compound Trigger (chống ORA-04091)", "Kiểm soát hạn mức ngày trên GIAO_DICH",
          "Khắc phục triệt để lỗi Mutating Table (ORA-04091) khi cần tổng hợp nhiều dòng trên chính bảng đang chèn dữ liệu."),
         ("SELECT ... FOR UPDATE WAIT & SAVEPOINT", "Kiểm soát đồng thời & toàn vẹn ACID",
          "Khoá dòng bi quan theo thứ tự tăng dần MA_VI nhằm loại bỏ Deadlock và khôi phục trạng thái nhất quán khi có lỗi."),
@@ -605,9 +632,9 @@ def build_chapters(doc):
     ]
     add_styled_table(doc, "Bảng 1.1. Tổng hợp công nghệ Oracle 23ai và kiến trúc sử dụng trong đồ án",
                      ["Công nghệ / Tính năng", "Vai trò trong hệ thống", "Lý do lựa chọn"],
-                     tech_rows, col_widths_cm=[4.5, 4.3, 7.2], font_size=10.5)
+                     tech_rows, col_widths_cm=[4.7, 4.2, 7.1], font_size=10.5)
 
-    add_figure(doc, "fig1_architecture.png", "Hình 1.1. Kiến trúc tổng thể 3 tầng hệ thống ví điện tử nội bộ trên Oracle Database 23ai")
+    add_figure(doc, "fig1_architecture.png", "Hình 1.1. Kiến trúc tổng thể 3 tầng hệ thống ví điện tử nội bộ trên Oracle Database 23ai", width_cm=14.2)
 
     add_h2(doc, "1.6. Kế hoạch thực hiện và phân công ban đầu của Nhóm 12")
     p_body(doc,
@@ -656,7 +683,7 @@ def build_chapters(doc):
            "trọn vẹn. Bảng 2.1 tổng hợp 10 ngoại lệ nghiệp vụ tự định nghĩa và các ngoại lệ định sẵn Oracle được hệ thống xử lý.")
 
     exc_rows = [
-        ("-20001", "e_so_du_khong_du", "Số dư khả dụng < (Số tiền + Phí GD)", "ROLLBACK về SAVEPOINT, ghi NHAT_KY_LOI_GIAO_DICH."),
+        ("-20001", "e_so_du_khong_du", "Số dư khả dụng < (Số tiền + Phí GD)", "ROLLBACK về SAVEPOINT, ghi\nNHAT_KY_LOI_GIAO_DICH."),
         ("-20002", "e_giao_dich_trung_lap", "Trùng MA_THAM_CHIEU hoặc vi phạm UQ_GD_THAM_CHIEU (DUP_VAL_ON_INDEX)", "Từ chối xử lý lại giao dịch, giữ nguyên số dư, ghi log trùng."),
         ("-20003", "e_vi_bi_khoa", "Ví nguồn đang TAM_KHOA hoặc DONG_VINH_VIEN", "Chặn giao dịch ở cả Stored Procedure và Trigger BEFORE UPDATE."),
         ("-20004", "e_vi_khong_ton_tai", "Bắt NO_DATA_FOUND khi truy vấn VI_DIEN_TU / LOAI_GIAO_DICH / DOI_TAC", "Chuyển đổi thành lỗi nghiệp vụ rõ ràng thay vì lộ lỗi hệ thống."),
@@ -669,7 +696,7 @@ def build_chapters(doc):
     ]
     add_styled_table(doc, "Bảng 2.1. Danh mục 10 ngoại lệ trọng tâm và cơ chế xử lý trong Oracle 23ai",
                      ["Mã Oracle", "Tên Exception (PL/SQL)", "Tình huống kích hoạt", "Hành động xử lý & Khôi phục"],
-                     exc_rows, col_widths_cm=[2.0, 4.2, 5.0, 4.8], font_size=10.5)
+                     exc_rows, col_widths_cm=[1.9, 4.1, 5.0, 5.0], font_size=10.5)
 
     add_h2(doc, "2.3. Mô hình thực thể kết hợp (ERD) và chuẩn hoá 3NF")
     p_body(doc,
@@ -692,14 +719,14 @@ def build_chapters(doc):
             ("PHONG_BAN", "MA_PB", "VARCHAR2(20)", "PK – Mã định danh phòng ban (PB_CNTT, PB_KTTC...)."),
             ("PHONG_BAN", "TEN_PB", "NVARCHAR2(100)", "NOT NULL – Tên phòng ban tiếng Việt Unicode."),
             ("PHONG_BAN", "HAN_MUC_CHI_THANG", "NUMBER(18,2)", "DEFAULT 500000000, CHECK (>= 0) – Hạn mức chi tháng."),
-            ("PHONG_BAN", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('HOAT_DONG','NGUNG_HOAT_DONG')."),
+            ("PHONG_BAN", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('HOAT_DONG', 'NGUNG_HOAT_DONG')."),
             ("NHAN_VIEN", "MA_NV", "VARCHAR2(20)", "PK – Mã nhân viên (NV001..NV010)."),
             ("NHAN_VIEN", "HO_TEN", "NVARCHAR2(120)", "NOT NULL – Họ và tên đầy đủ của nhân viên."),
             ("NHAN_VIEN", "EMAIL", "VARCHAR2(120)", "NOT NULL, UNIQUE – Email doanh nghiệp duy nhất."),
             ("NHAN_VIEN", "SO_DIEN_THOAI", "VARCHAR2(20)", "NOT NULL – Số điện thoại liên hệ."),
             ("NHAN_VIEN", "CHUC_VU", "NVARCHAR2(80)", "NOT NULL – Chức danh công việc."),
             ("NHAN_VIEN", "MA_PB", "VARCHAR2(20)", "NOT NULL, FK → PHONG_BAN(MA_PB)."),
-            ("NHAN_VIEN", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('DANG_LAM_VIEC','NGHI_VIEC')."),
+            ("NHAN_VIEN", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('DANG_LAM_VIEC', 'NGHI_VIEC')."),
         ],
         col_widths_cm=[2.8, 4.3, 3.2, 5.7], font_size=9.5
     )
@@ -712,18 +739,18 @@ def build_chapters(doc):
             ("VI_DIEN_TU", "MA_VI", "VARCHAR2(20)", "PK – Mã ví điện tử (VI001, VI_DT_CANTIN...)."),
             ("VI_DIEN_TU", "SO_TAI_KHOAN", "VARCHAR2(30)", "NOT NULL, UNIQUE – Số tài khoản ví nội bộ."),
             ("VI_DIEN_TU", "MA_NV", "VARCHAR2(20)", "NOT NULL, FK → NHAN_VIEN, UQ(MA_NV, LOAI_VI)."),
-            ("VI_DIEN_TU", "LOAI_VI", "VARCHAR2(20)", "CHECK IN ('NHAN_VIEN','DOI_TAC','HE_THONG')."),
+            ("VI_DIEN_TU", "LOAI_VI", "VARCHAR2(20)", "CHECK IN ('NHAN_VIEN', 'DOI_TAC', 'HE_THONG')."),
             ("VI_DIEN_TU", "SO_DU", "NUMBER(18,2)", "DEFAULT 0, CHECK (SO_DU >= 0) – Tổng số dư ví."),
             ("VI_DIEN_TU", "SO_DU_KHA_DUNG", "NUMBER(18,2)", "CHECK (SO_DU_KHA_DUNG >= 0 AND <= SO_DU)."),
             ("VI_DIEN_TU", "HAN_MUC_NGAY", "NUMBER(18,2)", "DEFAULT 50000000, CHECK (> 0) – Hạn mức chi/ngày."),
-            ("VI_DIEN_TU", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('HOAT_DONG','TAM_KHOA','DONG_VINH_VIEN')."),
+            ("VI_DIEN_TU", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('HOAT_DONG', 'TAM_KHOA', 'DONG_VINH_VIEN')."),
             ("VI_DIEN_TU", "VERSION_LOCK", "NUMBER(10)", "DEFAULT 0 – Đếm phiên bản cập nhật đồng thời."),
             ("DOI_TAC_DICH_VU", "MA_DOI_TAC", "VARCHAR2(20)", "PK – Mã đối tác (DT_CANTIN, DT_BAIXE, DT_INAN)."),
             ("DOI_TAC_DICH_VU", "TEN_DOI_TAC", "NVARCHAR2(120)", "NOT NULL – Tên đơn vị cung ứng nội bộ."),
-            ("DOI_TAC_DICH_VU", "LOAI_DICH_VU", "VARCHAR2(40)", "CHECK IN ('CAN_TIN','BAI_XE','IN_AN',...)."),
+            ("DOI_TAC_DICH_VU", "LOAI_DICH_VU", "VARCHAR2(40)", "CHECK IN ('CAN_TIN', 'BAI_XE', 'IN_AN',...)."),
             ("DOI_TAC_DICH_VU", "MA_VI_NHAN", "VARCHAR2(20)", "NOT NULL, FK → VI_DIEN_TU(MA_VI)."),
             ("LOAI_GIAO_DICH", "MA_LOAI_GD", "VARCHAR2(30)", "PK – NAP_TIEN, RUT_TIEN, CHUYEN_NOI_BO, THANH_TOAN_DV, HOAN_TIEN."),
-            ("LOAI_GIAO_DICH", "PHI_CO_DINH / TY_LE", "NUMBER", "Quy tắc tính phí; CO_TINH_HAN_MUC IN (0,1)."),
+            ("LOAI_GIAO_DICH", "PHI_CO_DINH / TY_LE", "NUMBER", "Quy tắc tính phí; CO_TINH_HAN_MUC IN (0, 1)."),
         ],
         col_widths_cm=[3.5, 3.6, 3.4, 5.5], font_size=9.5
     )
@@ -738,7 +765,7 @@ def build_chapters(doc):
             ("GIAO_DICH", "MA_VI_NGUON / DICH", "VARCHAR2(20)", "FK → VI_DIEN_TU(MA_VI) (NULL với nguồn nạp / đích rút)."),
             ("GIAO_DICH", "MA_LOAI_GD / GOC", "VARCHAR2 / NUMBER", "FK → LOAI_GIAO_DICH; FK tự tham chiếu khi hoàn tiền."),
             ("GIAO_DICH", "SO_TIEN / PHI / TONG", "NUMBER(18,2)", "CHECK (SO_TIEN > 0, PHI_GD >= 0, TONG_TIEN > 0)."),
-            ("GIAO_DICH", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('CHO_XU_LY','THANH_CONG','THAT_BAI','DA_HOAN_TIEN')."),
+            ("GIAO_DICH", "TRANG_THAI", "VARCHAR2(20)", "CHECK IN ('CHO_XU_LY', 'THANH_CONG', 'THAT_BAI', 'DA_HOAN_TIEN')."),
             ("CHI_TIET_SO_CAI", "MA_BUT_TOAN", "NUMBER(18)", "PK – Sinh từ SEQ_SO_CAI."),
             ("CHI_TIET_SO_CAI", "MA_GD / MA_VI", "NUMBER / VARCHAR2", "FK → GIAO_DICH, FK → VI_DIEN_TU."),
             ("CHI_TIET_SO_CAI", "LOAI_BUT_TOAN", "VARCHAR2(10)", "CHECK IN ('GHI_NO', 'GHI_CO')."),
@@ -809,10 +836,12 @@ def build_chapters(doc):
     )
 
     p_body(doc,
-           "Tất cả 11 tệp script trong thư mục sql/ đều được viết theo chuẩn SQL/PL-SQL thuần (không chứa các lệnh chỉ dành "
-           "riêng cho SQL*Plus như PROMPT hay SET DEFINE OFF bên trong tệp, và tách các khối PL/SQL bằng dấu / trên dòng riêng), "
-           "nhờ đó chạy mượt mà trên cả Docker entrypoint lẫn DBeaver (tính năng Execute SQL Script – Alt+X). Khi kết nối DBeaver, "
-           "người dùng khai báo Host=localhost, Port=1521, Service Name=FREEPDB1 và tài khoản EWALLET_APP / Ewallet2026.")
+           "Toàn bộ 11 tệp kịch bản CSDL được chuẩn bị với hai phiên bản đồng bộ: thư mục sql/ (sử dụng dấu gạch chéo / trên dòng "
+           "riêng để phân tách các khối PL/SQL khi chạy tự động qua SQL*Plus hoặc script PowerShell trên Docker) và thư mục "
+           "sql_dbeaver/ (đã loại bỏ các dấu / đứng riêng để tránh lỗi ORA-00900: invalid SQL statement khi chạy hàng loạt bằng "
+           "tính năng Execute SQL Script – Alt+X trên DBeaver 26.x). Khi kết nối DBeaver, người dùng cần tạo kết nối trực tiếp "
+           "bằng đúng tài khoản sở hữu schema EWALLET_APP / Ewallet2026 tới Host=localhost, Port=1521, Service Name=FREEPDB1 "
+           "để hiển thị đầy đủ 9 bảng và thực thi các kịch bản kiểm thử.")
 
     add_h2(doc, "3.2. Cài đặt Package quản lý ngoại lệ PKG_NGOAI_LE_VI")
     p_body(doc,
@@ -869,8 +898,8 @@ END SP_GHI_NHAT_KY_LOI;"""
     p_body(doc,
            "Đặc biệt, trên các phiên bản Oracle 19c trở về trước, kiểu BOOLEAN chỉ tồn tại trong PL/SQL nên hàm trả về BOOLEAN "
            "không thể gọi trực tiếp trong câu lệnh SELECT. Tuy nhiên, từ Oracle Database 23ai, Oracle đã hỗ trợ kiểu dữ liệu "
-           "BOOLEAN gốc (native SQL BOOLEAN), cho phép hàm FN_KIEM_TRA_VI_HOAT_DONG(MA_VI) RETURN BOOLEAN chạy trực tiếp trong "
-           "truy vấn SELECT để phục vụ giao diện và kiểm tra nhanh.")
+           "BOOLEAN gốc (native SQL BOOLEAN), cho phép gọi trực tiếp hàm FN_KIEM_TRA_VI_HOAT_DONG (nhận tham số MA_VI, trả về "
+           "BOOLEAN) bên trong truy vấn SELECT để phục vụ giao diện và kiểm tra nhanh.")
 
     add_code_block(
         doc,
@@ -903,14 +932,17 @@ EXCEPTION
 END FN_TINH_PHI_GIAO_DICH;
 /
 
-CREATE OR REPLACE FUNCTION FN_KIEM_TRA_VI_HOAT_DONG(p_ma_vi IN VARCHAR2) RETURN BOOLEAN IS
+CREATE OR REPLACE FUNCTION FN_KIEM_TRA_VI_HOAT_DONG(
+    p_ma_vi IN VARCHAR2
+) RETURN BOOLEAN IS
     v_trang_thai VI_DIEN_TU.TRANG_THAI%TYPE;
 BEGIN
     SELECT TRANG_THAI INTO v_trang_thai FROM VI_DIEN_TU WHERE MA_VI = p_ma_vi;
     RETURN (v_trang_thai = 'HOAT_DONG');
 EXCEPTION
     WHEN NO_DATA_FOUND OR TOO_MANY_ROWS THEN RETURN FALSE;
-END FN_KIEM_TRA_VI_HOAT_DONG;"""
+END FN_KIEM_TRA_VI_HOAT_DONG;""",
+        font_size=8.8
     )
 
     add_h2(doc, "3.4. Cài đặt Package nghiệp vụ cốt lõi PKG_QUAN_LY_VI")
@@ -984,11 +1016,11 @@ CLOSE c_vi_doi_soat;"""
              "biến ngữ cảnh của PKG_QUAN_LY_VI (hoặc gán mặc định USER nếu sửa trực tiếp từ SQL).")
     p_bullet(doc, "TRG_KIEM_SOAT_GD_BATTUONG (COMPOUND TRIGGER FOR INSERT ON GIAO_DICH): ",
              "Nếu dùng row-level trigger thông thường để truy vấn SELECT SUM(TONG_TIEN) FROM GIAO_DICH kiểm tra hạn mức ngày, "
-             "Oracle sẽ báo lỗi ORA-04091 (table is mutating). Compound Trigger giải quyết bằng cách tách làm 3 pha: BEFORE STATEMENT "
-             "xoá bộ nhớ đệm; AFTER EACH ROW lưu lại mã ví nguồn và ngày vào mảng PL/SQL g_vi_ngay; AFTER STATEMENT mới thực hiện "
-             "truy vấn tổng hợp trên GIAO_DICH khi bảng đã hết trạng thái biến đổi.")
+             "Oracle sẽ báo lỗi ORA-04091 (table is mutating). Kiến trúc Compound Trigger cho phép tối đa 4 pha thời điểm; "
+             "trong đó trigger này triển khai 3 pha cần thiết: BEFORE STATEMENT xoá bộ nhớ đệm; AFTER EACH ROW lưu lại mã ví nguồn "
+             "và ngày vào mảng PL/SQL g_vi_ngay; AFTER STATEMENT mới thực hiện truy vấn tổng hợp trên GIAO_DICH khi bảng đã hết trạng thái biến đổi.")
 
-    add_figure(doc, "fig4_compound_trigger.png", "Hình 3.1. Cơ chế 4 pha của Compound Trigger ngăn ngừa lỗi Mutating Table (ORA-04091)")
+    add_figure(doc, "fig4_compound_trigger.png", "Hình 3.1. Cơ chế Compound Trigger ngăn ngừa lỗi Mutating Table (ORA-04091)")
 
     add_h2(doc, "3.6. Xây dựng lớp API Backend và Giao diện Web minh hoạ")
     p_body(doc,
@@ -998,22 +1030,22 @@ CLOSE c_vi_doi_soat;"""
 
     api_rows = [
         ("GET /api/health", "V$VERSION, SYS_CONTEXT", "Kiểm tra kết nối Oracle 23ai và tên PDB đang hoạt động."),
-        ("GET /api/dashboard", "VI_DIEN_TU, GIAO_DICH, NHAT_KY_LOI", "Thống kê tổng quan số ví, tổng số dư, 20 GD và 15 log lỗi mới nhất."),
-        ("GET /api/wallets", "VW_TONG_HOP_VI_NHAN_VIEN + FN_*", "Lấy danh sách ví kèm tổng chi trong ngày và xếp hạng ví từ SQL Function."),
-        ("GET /api/wallets/:maVi/details", "CHI_TIET_SO_CAI, NHAT_KY_TRANG_THAI_VI", "Xem sổ cái kế toán kép và lịch sử khoá/mở ví do Trigger ghi."),
+        ("GET /api/dashboard", "VI_DIEN_TU, GIAO_DICH,\nNHAT_KY_LOI_GIAO_DICH", "Thống kê tổng quan số ví, tổng số dư, 20 GD và 15 log lỗi mới nhất."),
+        ("GET /api/wallets", "VW_TONG_HOP_VI_\nNHAN_VIEN + FN_*", "Lấy danh sách ví kèm tổng chi trong ngày và xếp hạng ví từ SQL Function."),
+        ("GET /api/wallets/:maVi/details", "CHI_TIET_SO_CAI,\nNHAT_KY_TRANG_THAI_VI", "Xem sổ cái kế toán kép và lịch sử khoá/mở ví do Trigger ghi."),
         ("GET /api/fee", "FN_TINH_PHI_GIAO_DICH", "Tính trước phí giao dịch ngay khi người dùng nhập số tiền trên Web."),
-        ("POST /api/transactions/deposit", "PKG_QUAN_LY_VI.SP_NAP_TIEN", "Gọi thủ tục nạp tiền, nhận OUT Binds (maGd, maLoi, thongBao)."),
-        ("POST /api/transactions/withdraw", "PKG_QUAN_LY_VI.SP_RUT_TIEN", "Gọi thủ tục rút tiền có tính phí và kiểm tra hạn mức ngày."),
-        ("POST /api/transactions/transfer", "PKG_QUAN_LY_VI.SP_CHUYEN_TIEN", "Gọi thủ tục chuyển tiền nội bộ, hỗ trợ truyền lại Idempotency Key."),
-        ("POST /api/transactions/pay-service", "PKG_QUAN_LY_VI.SP_THANH_TOAN_DICH_VU", "Thanh toán tại Căn tin / Bãi xe / Trung tâm In ấn."),
-        ("POST /api/transactions/refund", "PKG_QUAN_LY_VI.SP_HOAN_TIEN", "Hoàn tiền cho giao dịch đã thành công ngay trên Dashboard."),
-        ("POST /api/wallets/:maVi/status", "PKG_QUAN_LY_VI.SP_KHOA_MO_VI", "Khoá hoặc mở khoá ví, kích hoạt Trigger ghi audit log."),
-        ("POST /api/reconcile", "PKG_QUAN_LY_VI.SP_DOI_SOAT_HANG_LOAT", "Chạy Explicit Cursor đối soát toàn bộ ví và sổ cái."),
-        ("POST /api/test-concurrent-duplicate", "Promise.all → SP_CHUYEN_TIEN", "Bắn 2 request song song cùng 1 mã tham chiếu để kiểm thử Race Condition."),
+        ("POST /api/transactions/deposit", "PKG_QUAN_LY_VI.\nSP_NAP_TIEN", "Gọi thủ tục nạp tiền, nhận OUT Binds (maGd, maLoi, thongBao)."),
+        ("POST /api/transactions/withdraw", "PKG_QUAN_LY_VI.\nSP_RUT_TIEN", "Gọi thủ tục rút tiền có tính phí và kiểm tra hạn mức ngày."),
+        ("POST /api/transactions/transfer", "PKG_QUAN_LY_VI.\nSP_CHUYEN_TIEN", "Gọi thủ tục chuyển tiền nội bộ, hỗ trợ truyền lại Idempotency Key."),
+        ("POST /api/transactions/pay-service", "PKG_QUAN_LY_VI.\nSP_THANH_TOAN_DICH_VU", "Thanh toán tại Căn tin / Bãi xe / Trung tâm In ấn."),
+        ("POST /api/transactions/refund", "PKG_QUAN_LY_VI.\nSP_HOAN_TIEN", "Hoàn tiền cho giao dịch đã thành công ngay trên Dashboard."),
+        ("POST /api/wallets/:maVi/status", "PKG_QUAN_LY_VI.\nSP_KHOA_MO_VI", "Khoá hoặc mở khoá ví, kích hoạt Trigger ghi audit log."),
+        ("POST /api/reconcile", "PKG_QUAN_LY_VI.\nSP_DOI_SOAT_HANG_LOAT", "Chạy Explicit Cursor đối soát toàn bộ ví và sổ cái."),
+        ("POST /api/test-concurrent-duplicate", "Promise.all →\nSP_CHUYEN_TIEN", "Bắn 2 request song song cùng 1 mã tham chiếu để kiểm thử Race Condition."),
     ]
     add_styled_table(doc, "Bảng 3.1. Danh sách các Endpoint REST API và ánh xạ tới đối tượng Oracle 23ai",
                      ["HTTP Endpoint", "Đối tượng Oracle 23ai được gọi", "Chức năng nghiệp vụ"],
-                     api_rows, col_widths_cm=[4.8, 5.2, 6.0], font_size=10)
+                     api_rows, col_widths_cm=[4.7, 5.4, 5.9], font_size=9.5)
 
     p_body(doc,
            "Luồng dữ liệu khép kín khi người dùng thực hiện chuyển tiền trên giao diện Web diễn ra như sau: (1) Trình duyệt "
@@ -1028,7 +1060,7 @@ CLOSE c_vi_doi_soat;"""
     add_figure(doc, "fig6_webui_dashboard.png",
                "Hình 3.2. Giao diện Dashboard thực tế kết nối Oracle Database 23ai Free (FREEPDB1)")
     add_figure(doc, "fig7_webui_exception_lab.png",
-               "Hình 3.3. Kiểm thử nhanh ngoại lệ (-20005) và Nhật ký lỗi tự động trên giao diện Web")
+               "Hình 3.3. Kiểm thử nhanh ngoại lệ (-20005) và Nhật ký lỗi trên giao diện Web")
 
     # =========================================================================
     # CHƯƠNG 4
@@ -1055,24 +1087,27 @@ CLOSE c_vi_doi_soat;"""
          "p_ma_loi = 0; VI001 tăng đúng 500.000đ; sinh 1 GD NAP_TIEN và 1 bút toán GHI_CO khớp số dư trước/sau.", "Đạt"),
         ("TC02", "Chuyển tiền nội bộ hợp lệ VI001 → VI002 (200.000đ)", "SP_CHUYEN_TIEN",
          "p_ma_loi = 0; VI001 giảm 200.000đ (GHI_NO), VI002 tăng 200.000đ (GHI_CO); tổng số dư hệ thống không đổi.", "Đạt"),
-        ("TC03", "Ngoại lệ số dư không đủ (VI007 số dư 50.000đ chuyển 5.000.000đ)", "e_so_du_khong_du (-20001)",
+        ("TC03", "Ngoại lệ số dư không đủ (VI007 số dư 50.000đ chuyển 5.000.000đ)", "e_so_du_khong_du\n(-20001)",
          "ROLLBACK TO sp_chuyen_tien; số dư VI007 giữ nguyên 50.000đ; NHAT_KY_LOI_GIAO_DICH ghi nhận bản ghi -20001.", "Đạt"),
-        ("TC04", "Ngoại lệ giao dịch trùng lặp (Gửi 2 lần hoặc 2 luồng song song cùng MA_THAM_CHIEU)", "e_giao_dich_trung_lap (-20002) / DUP_VAL_ON_INDEX",
+        ("TC04", "Ngoại lệ giao dịch trùng lặp (Gửi 2 lần hoặc 2 luồng song song cùng MA_THAM_CHIEU)", "e_giao_dich_trung_lap\n(-20002) /\nDUP_VAL_ON_INDEX",
          "Thử nghiệm song song Promise.all trên API trả chính xác 1 luồng mã 0 và 1 luồng bị chặn mã -20002.", "Đạt"),
         ("TC05", "Ngoại lệ ví bị khoá (Chuyển tiền từ VI006 đang TAM_KHOA)", "e_vi_bi_khoa (-20003)",
          "Thủ tục phát hiện TRANG_THAI <> 'HOAT_DONG', ném -20003 và ghi log; thử UPDATE trực tiếp cũng bị Trigger chặn.", "Đạt"),
-        ("TC06", "Ngoại lệ vượt hạn mức ngày (VI005 số dư > 35tr, hạn mức 20tr, chuyển 25tr)", "e_vuot_han_muc_ngay (-20005)",
-         "Trả chính xác mã -20005 (ERR_DAILY_LIMIT_EXCEEDED) cả khi chạy SQL script lẫn bấm nút trên Exception Lab.", "Đạt"),
-        ("TC07", "Hoàn tiền GD TC02 và thử hoàn tiền tiếp lần 2", "SP_HOAN_TIEN & e_khong_the_hoan_tien (-20009)",
-         "Lần 1 tạo GD HOAN_TIEN và đổi GD gốc sang DA_HOAN_TIEN; lần 2 bị chặn với mã -20009 (ERR_REFUND_NOT_ALLOWED).", "Đạt"),
-        ("TC08", "Đối soát toàn bộ hệ thống & gọi SQL BOOLEAN Oracle 23ai", "SP_DOI_SOAT_HANG_LOAT & FN_KIEM_TRA_VI_HOAT_DONG",
+        ("TC06", "Ngoại lệ vượt hạn mức ngày (VI005 số dư > 35tr, hạn mức 20tr, chuyển 25tr)", "e_vuot_han_muc_ngay\n(-20005)",
+         "Trả mã -20005\n(ERR_DAILY_LIMIT_\nEXCEEDED) cả trên SQL script lẫn Exception Lab.", "Đạt"),
+        ("TC07", "Hoàn tiền GD TC02 và thử hoàn tiền tiếp lần 2", "SP_HOAN_TIEN &\ne_khong_the_hoan_tien\n(-20009)",
+         "Lần 1 tạo GD HOAN_TIEN và đổi GD gốc sang DA_HOAN_TIEN; lần 2 bị chặn mã -20009\n(ERR_REFUND_NOT_\nALLOWED).", "Đạt"),
+        ("TC08", "Đối soát toàn bộ hệ thống & gọi SQL BOOLEAN Oracle 23ai", "SP_DOI_SOAT_\nHANG_LOAT &\nFN_KIEM_TRA_VI_\nHOAT_DONG",
          "Explicit Cursor duyệt toàn bộ 10 ví cho kết quả 0 ví lệch (khớp 100% với hơn 30.000 bút toán sổ cái); SQL trả TRUE/FALSE.", "Đạt"),
-        ("TC09", "Kiểm thử trực tiếp Compound Trigger trên bảng GIAO_DICH", "TRG_KIEM_SOAT_GD_BATTUONG (-20005)",
+        ("TC09", "Kiểm thử trực tiếp Compound Trigger trên bảng GIAO_DICH", "TRG_KIEM_SOAT_GD_\nBATTUONG (-20005)",
          "INSERT trực tiếp 25.000.000đ vượt hạn mức VI005 bị Compound Trigger chặn với mã -20005, không phát sinh ORA-04091.", "Đạt"),
     ]
     add_styled_table(doc, "Bảng 4.1. Tổng hợp 9 kịch bản kiểm thử chức năng, ngoại lệ và kết quả xác minh thực tế",
                      ["Mã TC", "Mô tả kịch bản kiểm thử", "Cơ chế / Ngoại lệ kiểm tra", "Kết quả xác minh thực tế trên Oracle 23ai", "Trạng thái"],
-                     tc_rows, col_widths_cm=[1.5, 4.2, 3.6, 5.2, 1.5], font_size=10)
+                     tc_rows, col_widths_cm=[1.3, 4.0, 4.1, 5.2, 1.4], font_size=9.5)
+
+    add_figure(doc, "fig8_webui_reconcile.png",
+               "Hình 4.1. Kết quả đối soát Explicit Cursor trên 10 ví (0 ví lệch) qua giao diện Web", width_cm=14.8)
 
     add_h2(doc, "4.3. Phân tích và tối ưu hoá Truy vấn 1 (Thống kê giao dịch 30 ngày)")
     p_body(doc,
@@ -1143,17 +1178,17 @@ SELECT v.MA_VI, nv.HO_TEN,
 
     opt_rows = [
         ("Truy vấn 1\n(Thống kê 30 ngày)", "TABLE ACCESS FULL (GIAO_DICH)\nCost = 102 | Buffers = 373",
-         "INDEX RANGE SCAN (Covering)\nIDX_GD_VI_NGUON_NGAY_TT\nCost = 5 (-95,1%) | Buffers = 5 (-98,7%)",
+         "INDEX RANGE SCAN (Covering)\nIDX_GD_VI_NGUON_NGAY_TT\nCost = 5 (-95,1%)\nBuffers = 5 (-98,7%)",
          "Bỏ TRUNC(NGAY_TAO) và đưa SO_TIEN vào cuối chỉ mục giúp đọc trọn vẹn trong 5 block lá."),
         ("Truy vấn 2\n(Đối soát 90 ngày)", "2x VW_SSQ + TABLE ACCESS FULL (CHI_TIET_SO_CAI)\nCost = 282 | Buffers = 924",
-         "1x INDEX FAST FULL SCAN\nIDX_SC_VI_NGAY_LOAI + HASH GROUP\nCost = 63 (-77,7%) | Buffers = 195 (-78,9%)",
+         "1x INDEX FAST FULL SCAN\nIDX_SC_VI_NGAY_LOAI + HASH GROUP\nCost = 63 (-77,7%)\nBuffers = 195 (-78,9%)",
          "Gom nhóm 1 lượt (Conditional Aggregation) kết hợp Covering Index thay thế 2 lần quét toàn bảng."),
     ]
     add_styled_table(doc, "Bảng 4.2. Kết quả đo Execution Plan thực tế trên Oracle Database 23ai (sql/10_optimization_plans.sql)",
                      ["Truy vấn", "Kế hoạch & Chi phí Trước tối ưu", "Kế hoạch & Chi phí Sau tối ưu", "Nguyên lý giảm chi phí CBO"],
-                     opt_rows, col_widths_cm=[3.0, 4.3, 4.8, 3.9], font_size=9.5)
+                     opt_rows, col_widths_cm=[2.8, 4.0, 5.4, 3.8], font_size=9.2)
 
-    add_figure(doc, "fig5_exec_plan_comparison.png", "Hình 4.1. Biểu đồ đo thực tế mức giảm Optimizer Cost và Buffers (Logical I/O) trên Oracle Database 23ai")
+    add_figure(doc, "fig5_exec_plan_comparison.png", "Hình 4.2. Biểu đồ đo thực tế mức giảm Optimizer Cost và Buffers trên Oracle Database 23ai")
 
     add_code_block(
         doc,
@@ -1189,8 +1224,8 @@ SELECT v.MA_VI, nv.HO_TEN,
            "Đối chiếu với các tiêu chí kỹ thuật bắt buộc và Rubric đánh giá của học phần, Nhóm 12 đã hoàn thành đầy đủ các "
            "hạng mục trọng tâm của Đề tài 08:")
     p_bullet(doc, "Về hạ tầng và thiết kế CSDL: ",
-             "Đóng gói hoàn chỉnh Docker Oracle Database 23ai Free với cấu hình tiếng Việt AL32UTF8; bộ script SQL/PL-SQL chạy "
-             "đồng nhất trên cả Docker và DBeaver; thiết kế lược đồ 9 bảng chuẩn 3NF kèm Sổ cái kế toán kép.")
+             "Đóng gói hoàn chỉnh Docker Oracle Database 23ai Free với cấu hình tiếng Việt AL32UTF8; chuẩn bị 2 bộ script đồng "
+             "bộ cho Docker SQL*Plus (sql/) và DBeaver Alt+X (sql_dbeaver/); thiết kế lược đồ 9 bảng chuẩn 3NF kèm Sổ cái kế toán kép.")
     p_bullet(doc, "Về kỹ thuật cốt lõi PL/SQL & Exception Handling: ",
              "Cài đặt hoàn chỉnh Package PKG_NGOAI_LE_VI (10 mã lỗi tuỳ biến -20001..-20010, ghi log độc lập bằng PRAGMA "
              "AUTONOMOUS_TRANSACTION), 5 Functions (gồm hàm BOOLEAN chuẩn SQL của Oracle 23ai), Package PKG_QUAN_LY_VI (7 thủ "
@@ -1272,7 +1307,8 @@ SELECT v.MA_VI, nv.HO_TEN,
         "(Cơ sở lý thuyết chuẩn hoá lược đồ quan hệ đến dạng chuẩn 3NF và kiểm soát đồng thời ACID).",
     ]
     for ref in refs:
-        p_body(doc, ref, space_after=8)
+        pr = p_body(doc, ref, space_after=8)
+        pr.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     # =========================================================================
     # PHỤ LỤC
@@ -1281,17 +1317,21 @@ SELECT v.MA_VI, nv.HO_TEN,
 
     add_h2(doc, "Phụ lục A. Trình tự triển khai hệ thống trên Docker và DBeaver")
     p_body(doc,
-           "Toàn bộ mã nguồn dự án được tổ chức thành 4 thành phần độc lập nhưng liên kết chặt chẽ: docker-compose.yml, "
-           "thư mục sql/ (11 tệp kịch bản), thư mục backend/ (Node.js API và giao diện Web) và thư mục scripts/run_sql_docker.ps1.")
+           "Toàn bộ mã nguồn dự án được tổ chức thành 5 thành phần liên kết chặt chẽ gồm tệp docker-compose.yml, "
+           "thư mục sql/ (11 tệp dùng dấu / cho SQL*Plus và Docker), thư mục sql_dbeaver/ (11 tệp đồng bộ đã bỏ dấu / "
+           "đứng riêng cho DBeaver Alt+X), thư mục backend/ (Node.js API và Giao diện Web) cùng tập lệnh scripts/run_sql_docker.ps1. "
+           "Mã nguồn đầy đủ được lưu trữ công khai tại kho lưu trữ GitHub nhóm:")
+    p_github = p_body(doc, "https://github.com/TheDay0811/huflit-oracle23ai-ewallet-nhom12", first_line_indent=0.6)
+    p_github.alignment = WD_ALIGN_PARAGRAPH.LEFT
     p_bullet(doc, "Bước 1 – Khởi động Oracle Database 23ai trên Docker: ",
              "Mở Docker Desktop, khởi động container oracle23ai có sẵn (docker start oracle23ai) hoặc chạy docker compose up -d "
              "tại thư mục gốc dự án để tạo container oracle23ai_ewallet. Tiếp đó chạy .\\scripts\\run_sql_docker.ps1; tập lệnh "
              "tự động phát hiện container đang chạy và nạp đủ 9 bảng, 15.000+ giao dịch mẫu, Packages, Functions, Triggers "
              "cùng kết quả 9 kịch bản kiểm thử và Execution Plan.")
     p_bullet(doc, "Bước 2 – Kết nối và chạy kiểm tra trên DBeaver: ",
-             "Tạo kết nối Oracle mới trên DBeaver trỏ tới localhost:1521 với Service Name là FREEPDB1 (tài khoản EWALLET_APP / "
-             "Ewallet2026). Bật cửa sổ Server Output (Ctrl+Shift+O), mở sql/09_test_scenarios.sql và nhấn Alt+X để xem kết quả "
-             "9 kịch bản kiểm thử cùng nhật ký ngoại lệ.")
+             "Tạo kết nối Oracle mới trên DBeaver trỏ tới localhost:1521 với Service Name là FREEPDB1 và đăng nhập trực tiếp "
+             "bằng tài khoản sở hữu schema EWALLET_APP / Ewallet2026 (tránh dùng user khác gây trống danh sách Tables). Bật cửa sổ "
+             "Server Output (Ctrl+Shift+O), mở sql_dbeaver/09_test_scenarios.sql và nhấn Alt+X để chạy mượt mà 9 kịch bản kiểm thử.")
     p_bullet(doc, "Bước 3 – Chạy ứng dụng Web minh hoạ: ",
              "Mở terminal tại thư mục backend/, chạy npm install và npm start. Truy cập http://localhost:3000 trên trình duyệt "
              "để kiểm tra trạng thái kết nối xanh lá Oracle 23ai (FREEPDB1).")
@@ -1314,7 +1354,7 @@ npm start"""
     add_h2(doc, "Phụ lục B. Kịch bản Demo trực tiếp khi bảo vệ đồ án (8–10 phút)")
     demo_rows = [
         ("Phút 0–2", "Tổng quan & Kiến trúc", "Trình bày bài toán ví nội bộ, chỉ rõ 3 tầng Web ↔ Node.js oracledb ↔ Docker Oracle 23ai và trạng thái kết nối PDB FREEPDB1."),
-        ("Phút 2–4", "Demo DBeaver & PL/SQL lõi", "Mở DBeaver hiển thị 9 bảng 3NF, Package PKG_NGOAI_LE_VI (-20001..-20010), chạy truy vấn SQL gọi FN_TINH_PHI_GIAO_DICH và FN_KIEM_TRA_VI_HOAT_DONG (BOOLEAN 23ai)."),
+        ("Phút 2–4", "Demo DBeaver & PL/SQL lõi", "Mở DBeaver (kết nối EWALLET_APP) hiển thị 9 bảng 3NF, Package PKG_NGOAI_LE_VI (-20001..-20010), chạy truy vấn trong sql_dbeaver/ gọi FN_TINH_PHI_GIAO_DICH và FN_KIEM_TRA_VI_HOAT_DONG."),
         ("Phút 4–6", "Demo Giao dịch & Exception Lab", "Chuyển tiền hợp lệ VI001 → VI002; bấm 'Gửi lại mã tham chiếu' kích hoạt -20002; vào Exception Lab thử -20001 (VI007), -20003 (VI006), Race Condition song song và chỉ bảng NHAT_KY_LOI_GIAO_DICH."),
         ("Phút 6–8", "Demo Trigger, Hoàn tiền & Đối soát", "Khoá/Mở ví trên Web để hiện Audit Log do Trigger ghi; hoàn tiền 1 giao dịch; chạy Đối soát Explicit Cursor (0 ví lệch) và mở sql/10_optimization_plans.sql trình bày Execution Plan."),
     ]

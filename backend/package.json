@@ -1,0 +1,16 @@
+{
+  "name": "enterprise-ewallet-oracle23ai",
+  "version": "1.0.0",
+  "description": "He thong thanh toan vi dien tu noi bo doanh nghiep - Oracle Database 23ai (Nhom 12 - De tai 08)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "oracledb": "^6.6.0"
+  }
+}

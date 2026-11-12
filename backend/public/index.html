@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ví Điện Tử Nội Bộ Doanh Nghiệp — Oracle Database 23ai</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-badge">23ai</div>
+        <div>
+          <h1>CorpWallet</h1>
+          <p>Ví nội bộ doanh nghiệp</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn active" data-tab="dashboard">📊 Tổng quan & Giao dịch</button>
+        <button class="nav-btn" data-tab="wallets">💳 Quản lý Ví & Sổ cái</button>
+        <button class="nav-btn" data-tab="transfer">💸 Thực hiện Giao dịch</button>
+        <button class="nav-btn" data-tab="exceptions">🛡️ Kiểm thử Ngoại lệ & Log</button>
+        <button class="nav-btn" data-tab="reconcile">⚖️ Đối soát & Tối ưu SQL</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div id="db-status" class="db-pill checking">Đang kiểm tra Oracle 23ai...</div>
+        <div class="group-info">
+          <strong>Nhóm 12 — HUFLIT 2026</strong>
+          <span>Đề tài 08: PL/SQL & Exception</span>
+          <span>SV: Huy · Đức · Vinh</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <h2 id="page-title">Tổng quan Hệ thống Thanh toán Ví Nội bộ</h2>
+          <p class="subtitle">Kiến trúc 3 tầng: Web UI ↔ Node.js Express (oracledb Thin) ↔ Oracle Database 23ai (FREEPDB1)</p>
+        </div>
+        <button id="btn-refresh" class="btn btn-outline">↻ Làm mới dữ liệu</button>
+      </header>
+
+      <div id="toast-container" class="toast-container"></div>
+
+      <!-- TAB 1: DASHBOARD -->
+      <section id="tab-dashboard" class="tab-panel active">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <span class="stat-label">Tổng số ví nội bộ</span>
+            <strong id="stat-total-wallets" class="stat-value">—</strong>
+            <small id="stat-wallet-sub" class="stat-sub">Hoạt động / Bị khoá</small>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Tổng số dư toàn hệ thống</span>
+            <strong id="stat-total-balance" class="stat-value">—</strong>
+            <small class="stat-sub">VNĐ (Khớp 100% sổ cái kép)</small>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Giao dịch thành công</span>
+            <strong id="stat-total-tx" class="stat-value">—</strong>
+            <small id="stat-tx-today" class="stat-sub">Hôm nay: —</small>
+          </div>
+          <div class="stat-card warn">
+            <span class="stat-label">Ngoại lệ đã bắt & ghi log</span>
+            <strong id="stat-total-err" class="stat-value">—</strong>
+            <small class="stat-sub">PRAGMA AUTONOMOUS_TRANSACTION</small>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>20 Giao dịch gần nhất</h3>
+            <span class="badge">GIAO_DICH</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mã GD</th>
+                  <th>Mã tham chiếu (Idempotency)</th>
+                  <th>Loại GD</th>
+                  <th>Ví nguồn → Ví đích</th>
+                  <th>Số tiền</th>
+                  <th>Phí</th>
+                  <th>Trạng thái</th>
+                  <th>Thời gian</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-recent-tx"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: WALLETS -->
+      <section id="tab-wallets" class="tab-panel">
+        <div class="card">
+          <div class="card-header">
+            <h3>Danh sách Ví điện tử nội bộ (kèm Function SQL-callable)</h3>
+            <span class="badge">VW_TONG_HOP_VI_NHAN_VIEN</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mã ví</th>
+                  <th>Chủ ví / Phòng ban</th>
+                  <th>Loại</th>
+                  <th>Số dư khả dụng</th>
+                  <th>Đã chi hôm nay / Hạn mức</th>
+                  <th>Hạng ví (FN)</th>
+                  <th>Trạng thái</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-wallets"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="wallet-detail-box" class="card hidden">
+          <div class="card-header">
+            <h3 id="wallet-detail-title">Chi tiết Sổ cái & Nhật ký trạng thái</h3>
+            <button id="btn-close-detail" class="btn btn-sm btn-outline">Đóng</button>
+          </div>
+          <div class="split-2">
+            <div>
+              <h4>Sổ cái kế toán kép (CHI_TIET_SO_CAI)</h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Bút toán</th>
+                      <th>Mã GD</th>
+                      <th>Loại</th>
+                      <th>Số tiền</th>
+                      <th>Trước → Sau</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-wallet-ledger"></tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h4>Lịch sử trạng thái ví (Trigger TRG_NHAT_KY_TRANG_THAI_VI)</h4>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cũ → Mới</th>
+                      <th>Lý do</th>
+                      <th>Người sửa</th>
+                      <th>Thời gian</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbl-wallet-status-log"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: TRANSACTIONS -->
+      <section id="tab-transfer" class="tab-panel">
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header">
+              <h3>Thực hiện Giao dịch Ví</h3>
+              <div class="tx-mode-tabs">
+                <button class="mode-btn active" data-mode="transfer">Chuyển tiền</button>
+                <button class="mode-btn" data-mode="deposit">Nạp tiền</button>
+                <button class="mode-btn" data-mode="withdraw">Rút tiền</button>
+                <button class="mode-btn" data-mode="service">Thanh toán DV</button>
+              </div>
+            </div>
+
+            <form id="tx-form" class="form">
+              <div id="group-src" class="field">
+                <label>Ví nguồn</label>
+                <select id="tx-src" required></select>
+              </div>
+
+              <div id="group-dst" class="field">
+                <label>Ví đích</label>
+                <select id="tx-dst" required></select>
+              </div>
+
+              <div id="group-merchant" class="field hidden">
+                <label>Đối tác dịch vụ nội bộ</label>
+                <select id="tx-merchant"></select>
+              </div>
+
+              <div class="field">
+                <label>Số tiền (VNĐ)</label>
+                <input id="tx-amount" type="number" min="1000" step="1000" value="150000" required />
+                <small id="fee-preview" class="hint">Phí giao dịch (FN_TINH_PHI_GIAO_DICH): 0 VNĐ</small>
+              </div>
+
+              <div class="field">
+                <label>Mã tham chiếu (Idempotency Key)</label>
+                <div class="input-row">
+                  <input id="tx-ref" type="text" required />
+                  <button type="button" id="btn-gen-ref" class="btn btn-outline">Sinh mã mới</button>
+                </div>
+                <small class="hint">Giữ nguyên mã vừa chạy và bấm Gửi lại để kiểm thử ngoại lệ giao dịch trùng (-20002).</small>
+              </div>
+
+              <div class="field">
+                <label>Nội dung giao dịch</label>
+                <input id="tx-note" type="text" value="Thanh toán nội bộ qua CorpWallet" />
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" class="btn btn-primary">Thực thi qua PL/SQL Package</button>
+                <button type="button" id="btn-replay-last" class="btn btn-warn">↺ Gửi lại mã tham chiếu gần nhất</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>Kết quả thực thi từ Oracle 23ai</h3>
+              <span class="badge">OUT BINDS</span>
+            </div>
+            <pre id="tx-result-box" class="console-box">Chưa có giao dịch nào được thực hiện trong phiên này.</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 4: EXCEPTIONS -->
+      <section id="tab-exceptions" class="tab-panel">
+        <div class="card">
+          <div class="card-header">
+            <h3>Bộ mô phỏng nhanh các Ngoại lệ Trọng tâm (Exception Handling Lab)</h3>
+            <span class="badge">USER-DEFINED & PREDEFINED</span>
+          </div>
+          <div class="quick-tests">
+            <button class="test-btn" data-test="insufficient">
+              <strong>-20001 Số dư không đủ</strong>
+              <span>Chuyển 5.000.000đ từ VI007 (chỉ có 50.000đ)</span>
+            </button>
+            <button class="test-btn" data-test="locked">
+              <strong>-20003 Ví bị khoá</strong>
+              <span>Chuyển 100.000đ từ VI006 (đang TAM_KHOA)</span>
+            </button>
+            <button class="test-btn" data-test="duplicate">
+              <strong>-20002 Giao dịch trùng / Race</strong>
+              <span>Bắn 2 request song song cùng 1 Idempotency Key</span>
+            </button>
+            <button class="test-btn" data-test="limit">
+              <strong>-20005 Vượt hạn mức ngày</strong>
+              <span>Chuyển 25.000.000đ từ VI005 (hạn mức 20tr)</span>
+            </button>
+            <button class="test-btn" data-test="same">
+              <strong>-20007 Chuyển cùng ví</strong>
+              <span>Chuyển từ VI001 sang chính VI001</span>
+            </button>
+            <button class="test-btn" data-test="notfound">
+              <strong>-20004 Ví không tồn tại</strong>
+              <span>Bắt NO_DATA_FOUND và ánh xạ sang -20004</span>
+            </button>
+          </div>
+          <pre id="exception-test-output" class="console-box">Nhấn vào một nút kiểm thử phía trên để xem Oracle 23ai bắt ngoại lệ, ROLLBACK giao dịch chính và ghi log bằng PRAGMA AUTONOMOUS_TRANSACTION.</pre>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h3>Nhật ký Ngoại lệ Giao dịch (NHAT_KY_LOI_GIAO_DICH)</h3>
+            <span class="badge">AUTONOMOUS_TRANSACTION</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Log ID</th>
+                  <th>Mã tham chiếu</th>
+                  <th>Module PL/SQL</th>
+                  <th>Mã Oracle</th>
+                  <th>Mã nghiệp vụ</th>
+                  <th>Thông điệp lỗi</th>
+                  <th>Thời gian</th>
+                </tr>
+              </thead>
+              <tbody id="tbl-error-logs"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: RECONCILE & OPTIMIZATION -->
+      <section id="tab-reconcile" class="tab-panel">
+        <div class="split-2">
+          <div class="card">
+            <div class="card-header">
+              <h3>Đối soát Sổ cái bằng Explicit Cursor</h3>
+              <span class="badge">SP_DOI_SOAT_HANG_LOAT</span>
+            </div>
+            <p class="desc">
+              Thủ tục mở Explicit Cursor <code>c_vi_doi_soat</code> duyệt qua từng ví, đối chiếu <code>VI_DIEN_TU.SO_DU</code> với tổng phát sinh Nợ/Có trong <code>CHI_TIET_SO_CAI</code> (hơn 30.000 bút toán).
+            </p>
+            <button id="btn-run-reconcile" class="btn btn-primary">▶ Chạy đối soát toàn hệ thống</button>
+            <pre id="reconcile-output" class="console-box">Nhấn nút để chạy Explicit Cursor đối soát...</pre>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h3>Kiểm thử 2 Truy vấn Tối ưu hoá</h3>
+              <span class="badge">COMPOSITE INDEX + SARGABLE</span>
+            </div>
+            <p class="desc">
+              Hệ thống đã tạo sẵn 2 Composite Covering Index (<code>IDX_GD_VI_NGUON_NGAY_TT</code>, <code>IDX_SC_VI_NGAY_LOAI</code>) trên tập dữ liệu hơn 15.000 giao dịch lịch sử và phân tích Execution Plan trong <code>sql/10_optimization_plans.sql</code>.
+            </p>
+            <ul class="opt-list">
+              <li><strong>Truy vấn 1:</strong> Thay <code>TRUNC(NGAY_TAO)</code> bằng dải thời gian Sargable + Covering Index → chuyển từ <em>TABLE ACCESS FULL</em> sang <em>INDEX RANGE SCAN</em>.</li>
+              <li><strong>Truy vấn 2:</strong> Thay 2 Correlated Subquery trên <code>CHI_TIET_SO_CAI</code> bằng gom nhóm 1 lượt (Conditional Aggregation) + Composite Index.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

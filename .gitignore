@@ -1,0 +1,20 @@
+# Secrets & local environment overrides (use .env.example as template)
+.env
+*.local.env
+
+# Node.js dependencies & logs
+node_modules/
+backend/node_modules/
+npm-debug.log*
+*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Office / OS temporary files
+~$*.docx
+~$*.xlsx
+.DS_Store
+Thumbs.db
+desktop.ini
